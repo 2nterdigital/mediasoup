@@ -3,6 +3,7 @@
 
 mod channel;
 mod common;
+mod resource_usage;
 mod utils;
 
 use crate::messages::{
@@ -25,6 +26,8 @@ use log::{debug, error, warn};
 use mediasoup_sys::fbs;
 use mediasoup_types::data_structures::AppData;
 use parking_lot::Mutex;
+use resource_usage::WorkerGetResourceUsageRequest;
+pub use resource_usage::WorkerResourceUsage;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::ops::RangeInclusive;
@@ -611,6 +614,16 @@ impl Worker {
         debug!("dump()");
 
         self.inner.channel.request("", WorkerDumpRequest {}).await
+    }
+
+    /// Get native worker resource usage.
+    pub async fn get_resource_usage(&self) -> Result<WorkerResourceUsage, RequestError> {
+        debug!("get_resource_usage()");
+
+        self.inner
+            .channel
+            .request("", WorkerGetResourceUsageRequest {})
+            .await
     }
 
     /// Updates the worker settings in runtime. Just a subset of the worker settings can be updated.
