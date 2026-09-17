@@ -4,6 +4,9 @@
 mod channel;
 mod common;
 mod resource_usage;
+#[cfg(feature = "test-worker-close")]
+#[doc(hidden)]
+pub mod test_worker;
 mod utils;
 
 use crate::messages::{
@@ -332,6 +335,9 @@ impl Drop for Inner {
     fn drop(&mut self) {
         debug!("drop()");
 
+        #[cfg(feature = "test-worker-close")]
+        test_worker::unregister(self.id);
+
         self.close();
     }
 }
@@ -581,6 +587,9 @@ impl Worker {
         on_exit: OE,
     ) -> io::Result<Self> {
         let inner = Inner::new(executor, worker_settings, worker_manager, on_exit).await?;
+
+        #[cfg(feature = "test-worker-close")]
+        test_worker::register(&inner);
 
         Ok(Self { inner })
     }

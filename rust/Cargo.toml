@@ -20,6 +20,9 @@ include = ["/benches", "/src", "/README.md"]
 default-target = "x86_64-unknown-linux-gnu"
 targets = []
 
+[features]
+test-worker-close = []
+
 [dependencies]
 async-channel = "1.7.1"
 async-executor = "1.4.1"
