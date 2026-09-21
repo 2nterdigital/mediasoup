@@ -1,6 +1,7 @@
 #ifndef MS_RTC_WEBRTC_TRANSPORT_HPP
 #define MS_RTC_WEBRTC_TRANSPORT_HPP
 
+#include "handles/SendCallbacks.hpp"
 #include "RTC/DtlsTransport.hpp"
 #include "RTC/ICE/IceCandidate.hpp"
 #include "RTC/ICE/IceServer.hpp"
@@ -63,9 +64,13 @@ namespace RTC
 		flatbuffers::Offset<FBS::WebRtcTransport::DumpResponse> FillBuffer(
 		  flatbuffers::FlatBufferBuilder& builder) const;
 		void ProcessStunPacketFromWebRtcServer(
-		  RTC::TransportTuple* tuple, const RTC::ICE::StunPacket* packet);
+		  RTC::TransportTuple* tuple, const RTC::ICE::StunPacket* packet, int64_t receivedAtUs);
 		void ProcessNonStunPacketFromWebRtcServer(
-		  RTC::TransportTuple* tuple, const uint8_t* data, size_t len, size_t bufferLen);
+		  RTC::TransportTuple* tuple,
+		  const uint8_t* data,
+		  size_t len,
+		  size_t bufferLen,
+		  int64_t receivedAtUs);
 		void RemoveTuple(RTC::TransportTuple* tuple);
 
 		/* Methods inherited from Channel::ChannelSocket::RequestHandler. */
@@ -79,24 +84,34 @@ namespace RTC
 	private:
 		bool IsConnected() const override;
 		void MayRunDtlsTransport();
-		void SendRtpPacket(
-		  RTC::Consumer* consumer,
-		  RTC::RTP::Packet* packet,
-		  RTC::Transport::onSendCallback* cb = nullptr) override;
+		void SendRtpPacket(RTC::Consumer* consumer, RTC::RTP::Packet* packet, onSendCallback cb = {}) override;
 		void SendRtcpPacket(RTC::RTCP::Packet* packet) override;
 		void SendRtcpCompoundPacket(RTC::RTCP::CompoundPacket* packet) override;
 		void SendMessage(
 		  RTC::DataConsumer* dataConsumer,
 		  RTC::SCTP::Message message,
-		  onQueuedCallback* cb = nullptr) override;
+		  onMessageQueuedCallback cb = {}) override;
 		bool SendData(const uint8_t* data, size_t len) override;
 		void RecvStreamClosed(uint32_t ssrc) override;
 		void SendStreamClosed(uint32_t ssrc) override;
-		void OnPacketReceived(RTC::TransportTuple* tuple, const uint8_t* data, size_t len, size_t bufferLen);
-		void OnStunDataReceived(RTC::TransportTuple* tuple, const uint8_t* data, size_t len);
-		void OnDtlsDataReceived(const RTC::TransportTuple* tuple, const uint8_t* data, size_t len);
-		void OnRtpDataReceived(RTC::TransportTuple* tuple, const uint8_t* data, size_t len, size_t bufferLen);
-		void OnRtcpDataReceived(RTC::TransportTuple* tuple, const uint8_t* data, size_t len);
+		void OnPacketReceived(
+		  RTC::TransportTuple* tuple,
+		  const uint8_t* data,
+		  size_t len,
+		  size_t bufferLen,
+		  int64_t receivedAtUs);
+		void OnStunDataReceived(
+		  RTC::TransportTuple* tuple, const uint8_t* data, size_t len, int64_t receivedAtUs);
+		void OnDtlsDataReceived(
+		  const RTC::TransportTuple* tuple, const uint8_t* data, size_t len, int64_t receivedAtUs);
+		void OnRtpDataReceived(
+		  RTC::TransportTuple* tuple,
+		  const uint8_t* data,
+		  size_t len,
+		  size_t bufferLen,
+		  int64_t receivedAtUs);
+		void OnRtcpDataReceived(
+		  RTC::TransportTuple* tuple, const uint8_t* data, size_t len, int64_t receivedAtUs);
 
 		/* Pure virtual methods inherited from RTC::UdpSocket::Listener. */
 	public:
@@ -105,7 +120,8 @@ namespace RTC
 		  const uint8_t* data,
 		  size_t len,
 		  size_t bufferLen,
-		  const struct sockaddr* remoteAddr) override;
+		  const struct sockaddr* remoteAddr,
+		  int64_t receivedAtUs) override;
 
 		/* Pure virtual methods inherited from RTC::TcpServer::Listener. */
 	public:
@@ -114,7 +130,11 @@ namespace RTC
 		/* Pure virtual methods inherited from RTC::TcpConnection::Listener. */
 	public:
 		void OnTcpConnectionPacketReceived(
-		  RTC::TcpConnection* connection, const uint8_t* data, size_t len, size_t bufferLen) override;
+		  RTC::TcpConnection* connection,
+		  const uint8_t* data,
+		  size_t len,
+		  size_t bufferLen,
+		  int64_t receivedAtUs) override;
 
 		/* Pure virtual methods inherited from RTC::ICE::IceServer::Listener. */
 	public:
@@ -150,7 +170,10 @@ namespace RTC
 		void OnDtlsTransportSendData(
 		  const RTC::DtlsTransport* dtlsTransport, const uint8_t* data, size_t len) override;
 		void OnDtlsTransportApplicationDataReceived(
-		  const RTC::DtlsTransport* dtlsTransport, const uint8_t* data, size_t len) override;
+		  const RTC::DtlsTransport* dtlsTransport,
+		  const uint8_t* data,
+		  size_t len,
+		  int64_t receivedAtUs) override;
 
 	private:
 		// Passed by argument.

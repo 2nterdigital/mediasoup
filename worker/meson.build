@@ -26,20 +26,6 @@ if host_machine.system() == 'windows'
   ]
 endif
 
-if get_option('ms_build_tests')
-  cpp_args += [
-    '-DMS_TEST',
-    '-DMS_LOG_STD'
-  ]
-endif
-
-if get_option('ms_build_fuzzer')
-  cpp_args += [
-    '-DMS_FUZZER',
-    '-DMS_LOG_STD'
-  ]
-endif
-
 if get_option('ms_log_trace')
   cpp_args += [
     '-DMS_LOG_TRACE',
@@ -58,6 +44,12 @@ if get_option('ms_rtc_logger_rtp')
   ]
 endif
 
+if get_option('ms_rtc_logger_send_burst')
+  cpp_args += [
+    '-DMS_RTC_LOGGER_SEND_BURST',
+  ]
+endif
+
 if get_option('ms_dump_rtp_payload_descriptor')
   cpp_args += [
     '-DMS_DUMP_RTP_PAYLOAD_DESCRIPTOR',
@@ -67,6 +59,26 @@ endif
 if get_option('ms_dump_rtp_shared_packet_memory_usage')
   cpp_args += [
     '-DMS_DUMP_RTP_SHARED_PACKET_MEMORY_USAGE',
+  ]
+endif
+
+if get_option('ms_build_tests')
+  cpp_args += [
+    '-DMS_TEST',
+    '-DMS_LOG_STD',
+  ]
+endif
+
+if get_option('ms_build_fuzzer')
+  cpp_args += [
+    '-DMS_FUZZER',
+    '-DMS_LOG_STD',
+  ]
+endif
+
+if get_option('ms_use_builtin_bwe')
+  cpp_args += [
+    '-DMS_USE_BUILTIN_BWE',
   ]
 endif
 
@@ -86,7 +98,6 @@ common_sources = [
   'src/lib.cpp',
   'src/DepLibSRTP.cpp',
   'src/DepLibUV.cpp',
-  'src/DepLibWebRTC.cpp',
   'src/DepOpenSSL.cpp',
   'src/Logger.cpp',
   'src/MediaSoupErrors.cpp',
@@ -124,12 +135,14 @@ common_sources = [
   'src/RTC/PortManager.cpp',
   'src/RTC/Producer.cpp',
   'src/RTC/RateCalculator.cpp',
+  'src/RTC/RemoteCaptureTimeEstimator.cpp',
+  'src/RTC/RemoteClockOffsetEstimator.cpp',
   'src/RTC/Router.cpp',
-  'src/RTC/RtcLogger.cpp',
+  'src/RTC/RtcLogger/RtpPacket.cpp',
+  'src/RTC/RtcLogger/SendBurst.cpp',
   'src/RTC/RtpListener.cpp',
   'src/RTC/RtpObserver.cpp',
   'src/RTC/SctpListener.cpp',
-  'src/RTC/SenderBandwidthEstimator.cpp',
   'src/RTC/SeqManager.cpp',
   'src/RTC/Serializable.cpp',
   'src/RTC/PipeProducerStreamManager.cpp',
@@ -141,8 +154,6 @@ common_sources = [
   'src/RTC/TcpConnection.cpp',
   'src/RTC/TcpServer.cpp',
   'src/RTC/Transport.cpp',
-  'src/RTC/TransportCongestionControlClient.cpp',
-  'src/RTC/TransportCongestionControlServer.cpp',
   'src/RTC/TransportTuple.cpp',
   'src/RTC/TrendCalculator.cpp',
   'src/RTC/UdpSocket.cpp',
@@ -159,6 +170,24 @@ common_sources = [
   'src/RTC/RtpDictionaries/RtpParameters.cpp',
   'src/RTC/RtpDictionaries/RtpRtxParameters.cpp',
   'src/RTC/SctpDictionaries/SctpStreamParameters.cpp',
+  'src/RTC/BWE/AimdRateControl.cpp',
+  'src/RTC/BWE/AlrDetector.cpp',
+  'src/RTC/BWE/BitrateProber.cpp',
+  'src/RTC/BWE/BitrateUtils.cpp',
+  'src/RTC/BWE/BweTypes.cpp',
+  'src/RTC/BWE/DelayBasedBwe.cpp',
+  'src/RTC/BWE/FeedbackAdapter.cpp',
+  'src/RTC/BWE/InterArrivalDelta.cpp',
+  'src/RTC/BWE/IntervalBudget.cpp',
+  'src/RTC/BWE/LinkCapacityEstimator.cpp',
+  'src/RTC/BWE/LossBasedController.cpp',
+  'src/RTC/BWE/ProbeBitrateEstimator.cpp',
+  'src/RTC/BWE/ProbeController.cpp',
+  'src/RTC/BWE/ProbePacketGenerator.cpp',
+  'src/RTC/BWE/RobustThroughputEstimator.cpp',
+  'src/RTC/BWE/SendPacketHistory.cpp',
+  'src/RTC/BWE/TargetRateController.cpp',
+  'src/RTC/BWE/TrendlineEstimator.cpp',
   'src/RTC/ICE/IceCandidate.cpp',
   'src/RTC/ICE/IceServer.cpp',
   'src/RTC/ICE/StunPacket.cpp',
@@ -285,6 +314,16 @@ common_sources = [
   'src/RTC/SCTP/public/Message.cpp',
 ]
 
+# The deps/libwebrtc bandwidth estimation is only built when the built-in one is
+# not used.
+if not get_option('ms_use_builtin_bwe')
+  common_sources += [
+    'src/DepLibWebRTC.cpp',
+    'src/RTC/TransportCongestionControlClient.cpp',
+    'src/RTC/TransportCongestionControlServer.cpp',
+  ]
+endif
+
 libuv_proj = subproject(
   'libuv',
   default_options: [
@@ -311,14 +350,6 @@ libsrtp3_proj = subproject(
   ],
 )
 
-abseil_cpp_proj = subproject(
-  'abseil-cpp',
-  default_options: [
-    'warning_level=0',
-    'cpp_std=c++17',
-  ],
-)
-
 ankerl_unordered_dense_dep = dependency('unordered_dense')
 
 flatbuffers_proj = subproject(
@@ -331,20 +362,13 @@ flatbuffers_proj = subproject(
 # flatbuffers schemas subdirectory.
 subdir('fbs')
 
-# Add current build directory so libwebrtc has access to FBS folder.
-libwebrtc_include_directories = include_directories('include', 'fbs')
-
-subdir('deps/libwebrtc')
-
 dependencies = [
   libuv_proj.get_variable('libuv_dep'),
   openssl_proj.get_variable('openssl_dep'),
   libsrtp3_proj.get_variable('libsrtp3_dep'),
-  abseil_cpp_proj.get_variable('absl_container_dep'),
   ankerl_unordered_dense_dep,
   flatbuffers_proj.get_variable('flatbuffers_dep'),
   flatbuffers_generator_dep,
-  libwebrtc_dep,
 ]
 
 link_whole = [
@@ -352,10 +376,33 @@ link_whole = [
   openssl_proj.get_variable('libcrypto_lib'),
   openssl_proj.get_variable('libssl_lib'),
   libsrtp3_proj.get_variable('libsrtp3'),
-  abseil_cpp_proj.get_variable('absl_container_lib'),
   flatbuffers_proj.get_variable('flatbuffers_lib'),
-  libwebrtc,
 ]
+
+if not get_option('ms_use_builtin_bwe')
+  # NOTE: abseil-cpp is in the tree only because deps/libwebrtc needs it.
+  abseil_cpp_proj = subproject(
+    'abseil-cpp',
+    default_options: [
+      'warning_level=0',
+      'cpp_std=c++17',
+    ],
+  )
+
+  # Add current build directory so libwebrtc has access to FBS folder.
+  libwebrtc_include_directories = include_directories('include', 'fbs')
+
+  subdir('deps/libwebrtc')
+
+  dependencies += [
+    abseil_cpp_proj.get_variable('absl_container_dep'),
+    libwebrtc_dep,
+  ]
+  link_whole += [
+    abseil_cpp_proj.get_variable('absl_container_lib'),
+    libwebrtc,
+  ]
+endif
 
 if host_machine.system() == 'windows'
   wingetopt_proj = subproject(
@@ -413,6 +460,7 @@ executable(
 mock_sources = [
   'mocks/src/MockShared.cpp',
   'mocks/src/handles/MockBackoffTimerHandle.cpp',
+  'mocks/src/handles/MockTimerHandle.cpp',
   'mocks/src/Channel/MockChannelMessageRegistrator.cpp',
   'mocks/src/RTC/SCTP/association/MockTransmissionControlBlockContext.cpp',
 ]
@@ -420,6 +468,7 @@ mock_sources = [
 test_sources = [
   'test/src/tests.cpp',
   'test/src/testHelpers.cpp',
+  'test/src/TestDepLibUV.cpp',
   'test/src/RTC/TestConsumer.cpp',
   'test/src/RTC/TestPipeProducerStreamManager.cpp',
   'test/src/RTC/TestSimpleProducerStreamManager.cpp',
@@ -429,12 +478,31 @@ test_sources = [
   'test/src/RTC/TestNackGenerator.cpp',
   'test/src/RTC/TestPortManager.cpp',
   'test/src/RTC/TestRateCalculator.cpp',
+  'test/src/RTC/TestRemoteCaptureTimeEstimator.cpp',
+  'test/src/RTC/TestRemoteClockOffsetEstimator.cpp',
   'test/src/RTC/TestRtpEncodingParameters.cpp',
   'test/src/RTC/TestSeqManager.cpp',
   'test/src/RTC/TestSubchannelsCodec.cpp',
-  'test/src/RTC/TestTransportCongestionControlServer.cpp',
   'test/src/RTC/TestTransportTuple.cpp',
   'test/src/RTC/TestTrendCalculator.cpp',
+  'test/src/RTC/BWE/helpers/LinkSimulator.cpp',
+  'test/src/RTC/BWE/TestAimdRateControl.cpp',
+  'test/src/RTC/BWE/TestAlrDetector.cpp',
+  'test/src/RTC/BWE/TestBitrateProber.cpp',
+  'test/src/RTC/BWE/TestBitrateUtils.cpp',
+  'test/src/RTC/BWE/TestDelayBasedBwe.cpp',
+  'test/src/RTC/BWE/TestFeedbackAdapter.cpp',
+  'test/src/RTC/BWE/TestInterArrivalDelta.cpp',
+  'test/src/RTC/BWE/TestIntervalBudget.cpp',
+  'test/src/RTC/BWE/TestLinkCapacityEstimator.cpp',
+  'test/src/RTC/BWE/TestLossBasedController.cpp',
+  'test/src/RTC/BWE/TestProbeBitrateEstimator.cpp',
+  'test/src/RTC/BWE/TestProbeController.cpp',
+  'test/src/RTC/BWE/TestProbePacketGenerator.cpp',
+  'test/src/RTC/BWE/TestRobustThroughputEstimator.cpp',
+  'test/src/RTC/BWE/TestSendPacketHistory.cpp',
+  'test/src/RTC/BWE/TestTargetRateController.cpp',
+  'test/src/RTC/BWE/TestTrendlineEstimator.cpp',
   'test/src/RTC/ICE/iceCommon.cpp',
   'test/src/RTC/ICE/TestStunPacket.cpp',
   'test/src/RTC/RTP/rtpCommon.cpp',
@@ -553,6 +621,12 @@ test_sources = [
   'test/src/Utils/TestTime.cpp',
   'test/src/Utils/TestUnwrappedSequenceNumber.cpp',
 ]
+
+if not get_option('ms_use_builtin_bwe')
+  test_sources += [
+    'test/src/RTC/TestTransportCongestionControlServer.cpp',
+  ]
+endif
 
 mediasoup_worker_test = executable(
   'mediasoup-worker-test',

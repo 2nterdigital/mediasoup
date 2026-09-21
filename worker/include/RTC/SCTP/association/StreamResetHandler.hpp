@@ -163,6 +163,25 @@ namespace RTC
 				bool isDeferred{ false };
 			};
 
+			/**
+			 * Represents a received outgoing stream reset request whose processing
+			 * had to be deferred because the sender's last assigned TSN had not been
+			 * reached yet (aka "deferred reset processing").
+			 */
+			struct DeferredIncomingRequest
+			{
+				/**
+				 * The sender's (that's the peer) last assigned TSN. Deferred reset
+				 * processing must end once the cumulative ack TSN reaches it.
+				 */
+				uint32_t senderLastAssignedTsn;
+
+				/**
+				 * The streams that are to be reset.
+				 */
+				std::vector<uint16_t> streamIds;
+			};
+
 		private:
 			using UnwrappedReConfigRequestSn = Utils::UnwrappedSequenceNumber<uint32_t>;
 
@@ -211,6 +230,18 @@ namespace RTC
 			 */
 			void HandleReceivedReConfigChunk(const ReConfigChunk* receivedReConfigChunk);
 
+			/**
+			 * Called at the end of processing a received SCTP packet. If this
+			 * association is in "deferred reset processing" and the cumulative ack TSN
+			 * has reached the sender's last assigned TSN, the deferred stream reset is
+			 * performed and deferred reset processing ends.
+			 *
+			 * Returns `true` if deferred reset processing ended, in which case the
+			 * chunks queued while it lasted have been released and there may be
+			 * messages to deliver.
+			 */
+			bool MayLeaveDeferredReset();
+
 		private:
 			/**
 			 * Called to validate a received RE-CONFIG chunk.
@@ -255,12 +286,12 @@ namespace RTC
 			void HandleReceivedReconfigurationResponseParameter(
 			  const ReconfigurationResponseParameter* receivedReconfigurationResponseParameter);
 
-			void OnReConfigTimer(uint64_t& baseTimeoutMs, bool& stop);
+			void OnReConfigTimer(int64_t& baseTimeoutMs, bool& stop);
 
 			/* Pure virtual methods inherited from BackoffTimerHandleInterface::Listener. */
 		public:
 			void OnBackoffTimer(
-			  BackoffTimerHandleInterface* backoffTimer, uint64_t& baseTimeoutMs, bool& stop) override;
+			  BackoffTimerHandleInterface* backoffTimer, int64_t& baseTimeoutMs, bool& stop) override;
 
 		private:
 			AssociationListenerDeferrer& associationListenerDeferrer;
@@ -279,6 +310,11 @@ namespace RTC
 			ReconfigurationResponseParameter::Result lastProcessedReqResult;
 			// The current stream request operation.
 			std::optional<CurrentRequest> currentRequest;
+			// The received request being deferred, if in deferred reset processing.
+			std::optional<DeferredIncomingRequest> deferredIncomingRequest;
+			// The received request that was performed when deferred reset processing
+			// ended, until the peer retries it and gets the final response.
+			std::optional<DeferredIncomingRequest> performedDeferredRequest;
 		};
 	} // namespace SCTP
 } // namespace RTC

@@ -5,18 +5,19 @@
 #include "RTC/TransportCongestionControlClient.hpp"
 #include "Logger.hpp"
 #include <libwebrtc/api/transport/network_types.h> // webrtc::TargetRateConstraints
+#include <cmath>                                   // std::llround()
 #include <limits>                                  // std::numeric_limits
 
 namespace RTC
 {
 	/* Static. */
 
-	// NOTE: TransportCongestionControlMinOutgoingBitrate is defined in
-	// TransportCongestionControlClient.hpp and exposed publicly.
-	static constexpr float MaxBitrateMarginFactor{ 0.1f };
-	static constexpr float MaxBitrateIncrementFactor{ 1.35f };
-	static constexpr float MaxPaddingBitrateFactor{ 0.85f };
-	static constexpr uint64_t AvailableBitrateEventInterval{ 1000u }; // In ms.
+	// NOTE: These are double rather than float because they are applied to bitrates,
+	// and float only holds exact integers up to 2^24 (16.7 Mbps).
+	static constexpr double MaxBitrateMarginFactor{ 0.1 };
+	static constexpr double MaxBitrateIncrementFactor{ 1.35 };
+	static constexpr double MaxPaddingBitrateFactor{ 0.85 };
+	static constexpr int64_t AvailableBitrateEventIntervalMs{ 1000 };
 	static constexpr size_t PacketLossHistogramLength{ 24 };
 
 	/* Instance methods. */
@@ -25,15 +26,15 @@ namespace RTC
 	  RTC::TransportCongestionControlClient::Listener* listener,
 	  SharedInterface* shared,
 	  RTC::BweType bweType,
-	  uint32_t initialAvailableBitrate,
-	  uint32_t maxOutgoingBitrate,
-	  uint32_t minOutgoingBitrate)
+	  int64_t absoluteMinOutgoingBitrate,
+	  int64_t initialAvailableBitrate,
+	  int64_t maxOutgoingBitrate,
+	  int64_t minOutgoingBitrate)
 	  : listener(listener),
 	    shared(shared),
 	    bweType(bweType),
-	    initialAvailableBitrate(
-	      std::max<uint32_t>(
-	        initialAvailableBitrate, RTC::TransportCongestionControlMinOutgoingBitrate)),
+	    absoluteMinOutgoingBitrate(absoluteMinOutgoingBitrate),
+	    initialAvailableBitrate(std::max<int64_t>(initialAvailableBitrate, absoluteMinOutgoingBitrate)),
 	    maxOutgoingBitrate(maxOutgoingBitrate),
 	    minOutgoingBitrate(minOutgoingBitrate)
 	{
@@ -64,7 +65,10 @@ namespace RTC
 		MS_ASSERT(this->rtpTransportControllerSend == nullptr, "transport controller already initialized");
 
 		webrtc::BitrateConstraints bitrateConfig;
-		bitrateConfig.start_bitrate_bps = static_cast<int>(this->initialAvailableBitrate);
+
+		// NOTE: The dependency takes a signed 32 bits bitrate, so it is clamped here.
+		bitrateConfig.start_bitrate_bps = static_cast<int>(
+		  std::min<int64_t>(this->initialAvailableBitrate, std::numeric_limits<int>::max()));
 
 		this->rtpTransportControllerSend =
 		  new webrtc::RtpTransportControllerSend(this, nullptr, this->controllerFactory, bitrateConfig);
@@ -78,7 +82,8 @@ namespace RTC
 		// videos are muted or using screensharing with still images)
 		this->rtpTransportControllerSend->EnablePeriodicAlrProbing(true);
 
-		this->processTimer = this->shared->CreateTimer(this);
+		this->processTimer =
+		  this->shared->CreateTimer(this, "transport-congestion-control-client-process");
 
 		this->processTimer->Start(
 		  std::min(
@@ -119,14 +124,14 @@ namespace RTC
 		MS_TRACE();
 
 #ifdef USE_TREND_CALCULATOR
-		const auto nowMs = this->shared->GetTimeMsInt64();
+		const auto nowMs = this->shared->GetTimeMs();
 #endif
 
-		this->bitrates.desiredBitrate          = 0u;
-		this->bitrates.effectiveDesiredBitrate = 0u;
+		this->bitrates.desiredBitrate          = 0;
+		this->bitrates.effectiveDesiredBitrate = 0;
 
 #ifdef USE_TREND_CALCULATOR
-		this->desiredBitrateTrend.ForceUpdate(0u, nowMs);
+		this->desiredBitrateTrend.ForceUpdate(0, nowMs);
 #endif
 
 		this->rtpTransportControllerSend->OnNetworkAvailability(false);
@@ -158,7 +163,7 @@ namespace RTC
 	}
 
 	void TransportCongestionControlClient::PacketSent(
-	  const webrtc::RtpPacketSendInfo& packetInfo, int64_t nowMs)
+	  const webrtc::RtpPacketSendInfo& packetInfo, int64_t nowUs)
 	{
 		MS_TRACE();
 
@@ -168,11 +173,14 @@ namespace RTC
 		}
 
 		// Notify the transport feedback adapter about the sent packet.
-		const rtc::SentPacket sentPacket(packetInfo.transport_sequence_number, nowMs);
+		// NOTE: The send time is truncated to whole milliseconds because that's the
+		// resolution the current estimator takes.
+		const rtc::SentPacket sentPacket(packetInfo.transport_sequence_number, nowUs / 1000);
+
 		this->rtpTransportControllerSend->OnSentPacket(sentPacket, packetInfo.length);
 	}
 
-	void TransportCongestionControlClient::ReceiveEstimatedBitrate(uint32_t bitrate)
+	void TransportCongestionControlClient::ReceiveEstimatedBitrate(int64_t bitrate)
 	{
 		MS_TRACE();
 
@@ -181,11 +189,13 @@ namespace RTC
 			return;
 		}
 
-		this->rtpTransportControllerSend->OnReceivedEstimatedBitrate(bitrate);
+		// NOTE: The dependency takes an unsigned 32 bits bitrate, so it is clamped here.
+		this->rtpTransportControllerSend->OnReceivedEstimatedBitrate(
+		  static_cast<uint32_t>(std::clamp<int64_t>(bitrate, 0, std::numeric_limits<uint32_t>::max())));
 	}
 
 	void TransportCongestionControlClient::ReceiveRtcpReceiverReport(
-	  RTC::RTCP::ReceiverReportPacket* packet, float rtt, int64_t nowMs)
+	  RTC::RTCP::ReceiverReportPacket* packet, float rttMs, int64_t receivedAtUs)
 	{
 		MS_TRACE();
 
@@ -211,8 +221,10 @@ namespace RTC
 			return;
 		}
 
+		// NOTE: The dependency works in milliseconds, so the arrival time is
+		// truncated here.
 		this->rtpTransportControllerSend->OnReceivedRtcpReceiverReport(
-		  reportBlockList, static_cast<int64_t>(rtt), nowMs);
+		  reportBlockList, static_cast<int64_t>(rttMs), receivedAtUs / 1000);
 	}
 
 	void TransportCongestionControlClient::ReceiveRtcpTransportFeedback(
@@ -224,9 +236,9 @@ namespace RTC
 		const size_t expectedPackets = feedback->GetPacketStatusCount();
 		size_t lostPackets           = 0;
 
-		for (const auto& result : feedback->GetPacketResults())
+		for (const auto& packetStatus : feedback->GetPacketStatuses())
 		{
-			if (!result.received)
+			if (!packetStatus.received)
 			{
 				lostPackets += 1;
 			}
@@ -286,7 +298,7 @@ namespace RTC
 		this->packetLoss = totalPacketLoss / samples;
 	}
 
-	void TransportCongestionControlClient::SetMaxOutgoingBitrate(uint32_t maxBitrate)
+	void TransportCongestionControlClient::SetMaxOutgoingBitrate(int64_t maxBitrate)
 	{
 		MS_TRACE();
 
@@ -294,14 +306,14 @@ namespace RTC
 
 		ApplyBitrateUpdates();
 
-		if (this->maxOutgoingBitrate > 0u)
+		if (this->maxOutgoingBitrate > 0)
 		{
 			this->bitrates.availableBitrate =
-			  std::min<uint32_t>(this->maxOutgoingBitrate, this->bitrates.availableBitrate);
+			  std::min<int64_t>(this->maxOutgoingBitrate, this->bitrates.availableBitrate);
 		}
 	}
 
-	void TransportCongestionControlClient::SetMinOutgoingBitrate(uint32_t minBitrate)
+	void TransportCongestionControlClient::SetMinOutgoingBitrate(int64_t minBitrate)
 	{
 		MS_TRACE();
 
@@ -309,16 +321,16 @@ namespace RTC
 
 		ApplyBitrateUpdates();
 
-		this->bitrates.minBitrate = std::max<uint32_t>(
-		  this->minOutgoingBitrate, RTC::TransportCongestionControlMinOutgoingBitrate);
+		this->bitrates.minBitrate =
+		  std::max<int64_t>(this->minOutgoingBitrate, this->absoluteMinOutgoingBitrate);
 	}
 
-	void TransportCongestionControlClient::SetDesiredBitrate(uint32_t desiredBitrate, bool force)
+	void TransportCongestionControlClient::SetDesiredBitrate(int64_t desiredBitrate, bool force)
 	{
 		MS_TRACE();
 
 #ifdef USE_TREND_CALCULATOR
-		const auto nowMs = this->shared->GetTimeMsInt64();
+		const auto nowMs = this->shared->GetTimeMs();
 #endif
 
 		// Manage it via trending and increase it a bit to avoid immediate oscillations.
@@ -341,13 +353,13 @@ namespace RTC
 		this->bitrates.effectiveDesiredBitrate = desiredBitrate;
 #endif
 
-		this->bitrates.minBitrate = std::max<uint32_t>(
-		  this->minOutgoingBitrate, RTC::TransportCongestionControlMinOutgoingBitrate);
+		this->bitrates.minBitrate =
+		  std::max<int64_t>(this->minOutgoingBitrate, this->absoluteMinOutgoingBitrate);
 
 		// NOTE: Setting 'startBitrate' to 'availableBitrate' has proven to generate
 		// more stable values.
-		this->bitrates.startBitrate = std::max<uint32_t>(
-		  RTC::TransportCongestionControlMinOutgoingBitrate, this->bitrates.availableBitrate);
+		this->bitrates.startBitrate =
+		  std::max<int64_t>(this->absoluteMinOutgoingBitrate, this->bitrates.availableBitrate);
 
 		ApplyBitrateUpdates();
 	}
@@ -357,27 +369,28 @@ namespace RTC
 		MS_TRACE();
 
 		auto currentMaxBitrate = this->bitrates.maxBitrate;
-		uint32_t newMaxBitrate = 0;
+		int64_t newMaxBitrate  = 0;
 
 #ifdef USE_TREND_CALCULATOR
-		if (this->desiredBitrateTrend.GetValue() > 0u)
+		if (this->desiredBitrateTrend.GetValue() > 0)
 #else
-		if (this->bitrates.desiredBitrate > 0u)
+		if (this->bitrates.desiredBitrate > 0)
 #endif
 		{
-			newMaxBitrate = std::max<uint32_t>(
+			newMaxBitrate = std::max<int64_t>(
 			  this->initialAvailableBitrate,
 #ifdef USE_TREND_CALCULATOR
-			  this->desiredBitrateTrend.GetValue() * MaxBitrateIncrementFactor);
+			  std::llround(this->desiredBitrateTrend.GetValue() * MaxBitrateIncrementFactor));
 #else
-			  this->bitrates.desiredBitrate * MaxBitrateIncrementFactor);
+			  std::llround(this->bitrates.desiredBitrate * MaxBitrateIncrementFactor));
 #endif
 
 			// If max bitrate requested didn't change by more than a small % keep the
 			// previous settings to avoid constant small fluctuations requiring extra
 			// probing and making the estimation less stable (requires constant
 			// redistribution of bitrate accross consumers).
-			auto maxBitrateMargin = newMaxBitrate * MaxBitrateMarginFactor;
+			const int64_t maxBitrateMargin = std::llround(newMaxBitrate * MaxBitrateMarginFactor);
+
 			if (currentMaxBitrate > newMaxBitrate - maxBitrateMargin && currentMaxBitrate < newMaxBitrate + maxBitrateMargin)
 			{
 				newMaxBitrate = currentMaxBitrate;
@@ -388,23 +401,23 @@ namespace RTC
 			newMaxBitrate = this->initialAvailableBitrate;
 		}
 
-		if (this->maxOutgoingBitrate > 0u)
+		if (this->maxOutgoingBitrate > 0)
 		{
-			newMaxBitrate = std::min<uint32_t>(this->maxOutgoingBitrate, newMaxBitrate);
+			newMaxBitrate = std::min<int64_t>(this->maxOutgoingBitrate, newMaxBitrate);
 		}
 
 		if (newMaxBitrate != currentMaxBitrate)
 		{
-			this->bitrates.maxPaddingBitrate = newMaxBitrate * MaxPaddingBitrateFactor;
+			this->bitrates.maxPaddingBitrate = std::llround(newMaxBitrate * MaxPaddingBitrateFactor);
 			this->bitrates.maxBitrate        = newMaxBitrate;
 		}
 
-		this->bitrates.minBitrate = std::max<uint32_t>(
-		  this->minOutgoingBitrate, RTC::TransportCongestionControlMinOutgoingBitrate);
+		this->bitrates.minBitrate =
+		  std::max<int64_t>(this->minOutgoingBitrate, this->absoluteMinOutgoingBitrate);
 
 		MS_DEBUG_DEV(
-		  "[desiredBitrate:%" PRIu32 ", desiredBitrateTrend:%" PRIu32 ", startBitrate:%" PRIu32
-		  ", minBitrate:%" PRIu32 ", maxBitrate:%" PRIu32 ", maxPaddingBitrate:%" PRIu32 "]",
+		  "[desiredBitrate:%" PRIi64 ", desiredBitrateTrend:%" PRIu32 ", startBitrate:%" PRIi64
+		  ", minBitrate:%" PRIi64 ", maxBitrate:%" PRIi64 ", maxPaddingBitrate:%" PRIi64 "]",
 		  this->bitrates.desiredBitrate,
 		  this->desiredBitrateTrend.GetValue(),
 		  this->bitrates.startBitrate,
@@ -430,7 +443,7 @@ namespace RTC
 		this->rtpTransportControllerSend->SetClientBitratePreferences(constraints);
 	}
 
-	uint32_t TransportCongestionControlClient::GetAvailableBitrate() const
+	int64_t TransportCongestionControlClient::GetAvailableBitrate() const
 	{
 		MS_TRACE();
 
@@ -451,17 +464,17 @@ namespace RTC
 		this->lastAvailableBitrateEventAtMs = this->shared->GetTimeMs();
 	}
 
-	void TransportCongestionControlClient::MayEmitAvailableBitrateEvent(uint32_t previousAvailableBitrate)
+	void TransportCongestionControlClient::MayEmitAvailableBitrateEvent(int64_t previousAvailableBitrate)
 	{
 		MS_TRACE();
 
-		const uint64_t nowMs = this->shared->GetTimeMsInt64();
+		const int64_t nowMs = this->shared->GetTimeMs();
 		bool notify{ false };
 
 		// Ignore if first event.
 		// NOTE: Otherwise it will make the Transport crash since this event also happens
 		// during the constructor of this class.
-		if (this->lastAvailableBitrateEventAtMs == 0u)
+		if (this->lastAvailableBitrateEventAtMs == 0)
 		{
 			this->lastAvailableBitrateEventAtMs = nowMs;
 
@@ -475,8 +488,8 @@ namespace RTC
 
 			notify = true;
 		}
-		// Emit event if AvailableBitrateEventInterval elapsed.
-		else if (nowMs - this->lastAvailableBitrateEventAtMs >= AvailableBitrateEventInterval)
+		// Emit event if AvailableBitrateEventIntervalMs elapsed.
+		else if (nowMs - this->lastAvailableBitrateEventAtMs >= AvailableBitrateEventIntervalMs)
 		{
 			notify = true;
 		}
@@ -485,7 +498,7 @@ namespace RTC
 		{
 			MS_WARN_TAG(
 			  bwe,
-			  "high BWE value decrease detected, notifying the listener [now:%" PRIu32 ", before:%" PRIu32
+			  "high BWE value decrease detected, notifying the listener [now:%" PRIi64 ", before:%" PRIi64
 			  "]",
 			  this->bitrates.availableBitrate,
 			  previousAvailableBitrate);
@@ -497,7 +510,7 @@ namespace RTC
 		{
 			MS_DEBUG_TAG(
 			  bwe,
-			  "high BWE value increase detected, notifying the listener [now:%" PRIu32 ", before:%" PRIu32
+			  "high BWE value increase detected, notifying the listener [now:%" PRIi64 ", before:%" PRIi64
 			  "]",
 			  this->bitrates.availableBitrate,
 			  previousAvailableBitrate);
@@ -508,7 +521,7 @@ namespace RTC
 		if (notify)
 		{
 			MS_DEBUG_DEV(
-			  "notifying the listener with new available bitrate:%" PRIu32,
+			  "notifying the listener with new available bitrate:%" PRIi64,
 			  this->bitrates.availableBitrate);
 
 			this->lastAvailableBitrateEventAtMs = nowMs;
@@ -532,17 +545,11 @@ namespace RTC
 		auto previousAvailableBitrate = this->bitrates.availableBitrate;
 
 		// Update availableBitrate.
-		// NOTE: Just in case.
-		if (targetTransferRate.target_rate.bps() > std::numeric_limits<uint32_t>::max())
-		{
-			this->bitrates.availableBitrate = std::numeric_limits<uint32_t>::max();
-		}
-		else
-		{
-			this->bitrates.availableBitrate = static_cast<uint32_t>(targetTransferRate.target_rate.bps());
-		}
+		// NOTE: The dependency gives a signed 64 bits bitrate, so no clamping is
+		// needed other than discarding a negative value.
+		this->bitrates.availableBitrate = std::max<int64_t>(targetTransferRate.target_rate.bps(), 0);
 
-		MS_DEBUG_DEV("new available bitrate:%" PRIu32, this->bitrates.availableBitrate);
+		MS_DEBUG_DEV("new available bitrate:%" PRIi64, this->bitrates.availableBitrate);
 
 		MayEmitAvailableBitrateEvent(previousAvailableBitrate);
 	}

@@ -11,7 +11,7 @@
 #include "RTC/SvcProducerStreamManager.hpp"
 #include "Utils.hpp"
 #ifdef MS_RTC_LOGGER_RTP
-#include "RTC/RtcLogger.hpp"
+#include "RTC/RtcLogger/RtpPacket.hpp"
 #endif
 #include <limits> // std::numeric_limits
 
@@ -186,11 +186,11 @@ namespace RTC
 		// Set the RTCP report generation interval.
 		if (this->kind == RTC::Media::Kind::AUDIO)
 		{
-			this->maxRtcpInterval = RTC::RTCP::MaxAudioIntervalMs;
+			this->maxRtcpIntervalMs = RTC::RTCP::MaxAudioIntervalMs;
 		}
 		else
 		{
-			this->maxRtcpInterval = RTC::RTCP::MaxVideoIntervalMs;
+			this->maxRtcpIntervalMs = RTC::RTCP::MaxVideoIntervalMs;
 		}
 
 		auto& encoding = this->rtpParameters.encodings[0];
@@ -238,7 +238,7 @@ namespace RTC
 				if (
 				  mediaCodec->mimeType.type == RTC::RtpCodecMimeType::Type::AUDIO &&
 				  (mediaCodec->mimeType.subtype == RTC::RtpCodecMimeType::Subtype::OPUS ||
-				   mediaCodec->mimeType.subtype == RTC::RtpCodecMimeType::Subtype::MULTIOPUS))
+					 mediaCodec->mimeType.subtype == RTC::RtpCodecMimeType::Subtype::MULTIOPUS))
 				{
 					RTC::RTP::Codecs::EncodingContext::Params params;
 
@@ -556,7 +556,7 @@ namespace RTC
 		  RTC::RtpParameters::TypeToFbs(this->type),
 		  this->producerId.c_str(),
 		  this->kind == RTC::Media::Kind::AUDIO ? FBS::RtpParameters::MediaKind::AUDIO
-		                                        : FBS::RtpParameters::MediaKind::VIDEO,
+			                                      : FBS::RtpParameters::MediaKind::VIDEO,
 		  rtpParameters,
 		  &consumableRtpEncodings,
 		  &supportedCodecPayloadTypes,
@@ -984,6 +984,15 @@ namespace RTC
 		this->producerStreamManager->ProducerRtcpSenderReport(rtpStream, first);
 	}
 
+	void Consumer::ProducerSpatialLayerActivityChanged(
+	  RTC::RTP::RtpStreamRecv* rtpStream, uint8_t spatialLayer, bool isActive)
+	{
+		MS_TRACE();
+
+		this->producerStreamManager->ProducerSpatialLayerActivityChanged(
+		  rtpStream, spatialLayer, isActive);
+	}
+
 	// The caller (Router) is supposed to proceed with the deletion of this Consumer
 	// right after calling this method. Otherwise ugly things may happen.
 	void Consumer::ProducerClosed()
@@ -1020,7 +1029,7 @@ namespace RTC
 		return this->priority;
 	}
 
-	uint32_t Consumer::IncreaseLayer(uint32_t bitrate, bool considerLoss)
+	int64_t Consumer::IncreaseLayer(int64_t bitrate, bool considerLoss)
 	{
 		MS_TRACE();
 
@@ -1030,7 +1039,7 @@ namespace RTC
 		// Pipe does not play the BWE game.
 		if (this->pipe)
 		{
-			return 0u;
+			return 0;
 		}
 
 		float lossPercentage{ 0.0f };
@@ -1042,7 +1051,7 @@ namespace RTC
 			lossPercentage = rtpStream->GetLossPercentage();
 		}
 
-		auto nowMs = DepLibUV::GetTimeMs();
+		const int64_t nowMs = this->shared->GetTimeMs();
 
 		return this->producerStreamManager->IncreaseLayer(bitrate, considerLoss, lossPercentage, nowMs);
 	}
@@ -1065,7 +1074,7 @@ namespace RTC
 		this->producerStreamManager->ApplyLayers(rtpStream->GetActiveMs());
 	}
 
-	uint32_t Consumer::GetDesiredBitrate() const
+	int64_t Consumer::GetDesiredBitrate() const
 	{
 		MS_TRACE();
 
@@ -1074,21 +1083,22 @@ namespace RTC
 		// Pipe does not play the BWE game.
 		if (this->pipe)
 		{
-			return 0u;
+			return 0;
 		}
 
 		// Audio does not play the BWE game.
 		if (this->kind != RTC::Media::Kind::VIDEO)
 		{
-			return 0u;
+			return 0;
 		}
 
 		if (!IsActive())
 		{
-			return 0u;
+			return 0;
 		}
 
-		auto nowMs          = DepLibUV::GetTimeMs();
+		const int64_t nowMs = this->shared->GetTimeMs();
+
 		auto desiredBitrate = this->producerStreamManager->GetDesiredBitrate(nowMs);
 
 		// If consumer.rtpParameters.encodings[0].maxBitrate was given and it's
@@ -1356,22 +1366,24 @@ namespace RTC
 		}
 	}
 
-	bool Consumer::GetRtcp(RTC::RTCP::CompoundPacket* packet, uint64_t nowMs)
+	bool Consumer::GetRtcp(RTC::RTCP::CompoundPacket* packet, int64_t nowUs)
 	{
 		MS_TRACE();
+
+		// NOTE: The interval is in milliseconds, being it given to a timer, so the
+		// elapsed time is truncated here.
+		const int64_t elapsedMs = (nowUs - this->lastRtcpSentAtUs) / 1000;
 
 		// Special condition for pipe consumer since this method will be called in a
 		// loop for each stream.
 		if (this->pipe)
 		{
-			if (
-			  nowMs != this->lastRtcpSentTime &&
-			  static_cast<float>((nowMs - this->lastRtcpSentTime) * 1.15) < this->maxRtcpInterval)
+			if (nowUs != this->lastRtcpSentAtUs && static_cast<float>(elapsedMs * 1.15) < this->maxRtcpIntervalMs)
 			{
 				return true;
 			}
 		}
-		else if (static_cast<float>((nowMs - this->lastRtcpSentTime) * 1.15) < this->maxRtcpInterval)
+		else if (static_cast<float>(elapsedMs * 1.15) < this->maxRtcpIntervalMs)
 		{
 			return true;
 		}
@@ -1382,7 +1394,7 @@ namespace RTC
 
 		for (auto* rtpStream : this->rtpStreams)
 		{
-			auto* report = rtpStream->GetRtcpSenderReport(nowMs);
+			auto* report = rtpStream->GetRtcpSenderReport(nowUs);
 
 			if (!report)
 			{
@@ -1395,7 +1407,7 @@ namespace RTC
 			auto* sdesChunk = rtpStream->GetRtcpSdesChunk();
 			sdesChunks.push_back(sdesChunk);
 
-			auto* delaySinceLastRrSsrcInfo = rtpStream->GetRtcpXrDelaySinceLastRrSsrcInfo(nowMs);
+			auto* delaySinceLastRrSsrcInfo = rtpStream->GetRtcpXrDelaySinceLastRrSsrcInfo(nowUs);
 
 			if (delaySinceLastRrSsrcInfo)
 			{
@@ -1409,27 +1421,30 @@ namespace RTC
 			return false;
 		}
 
-		this->lastRtcpSentTime = nowMs;
+		this->lastRtcpSentAtUs = nowUs;
 
 		return true;
 	}
 
-	void Consumer::NeedWorstRemoteFractionLost(uint32_t /*mappedSsrc*/, uint8_t& worstRemoteFractionLost)
+	uint8_t Consumer::GetWorstRemoteFractionLost(uint32_t /*mappedSsrc*/) const
 	{
 		MS_TRACE();
 
 		if (!IsActive())
 		{
-			return;
+			return 0;
 		}
 
-		for (auto* rtpStream : this->rtpStreams)
-		{
-			auto fractionLost = rtpStream->GetFractionLost();
+		uint8_t worstRemoteFractionLost{ 0 };
 
-			// If our fraction lost is worse than the given one, update it.
+		for (const auto* rtpStream : this->rtpStreams)
+		{
+			const auto fractionLost = rtpStream->GetFractionLost();
+
 			worstRemoteFractionLost = std::max(fractionLost, worstRemoteFractionLost);
 		}
+
+		return worstRemoteFractionLost;
 	}
 
 	void Consumer::ReceiveNack(RTC::RTCP::FeedbackRtpNackPacket* nackPacket)
@@ -1509,26 +1524,27 @@ namespace RTC
 		}
 	}
 
-	void Consumer::ReceiveRtcpReceiverReport(RTC::RTCP::ReceiverReport* report)
+	void Consumer::ReceiveRtcpReceiverReport(RTC::RTCP::ReceiverReport* report, int64_t receivedAtUs)
 	{
 		MS_TRACE();
 
 		auto* rtpStream = this->mapSsrcRtpStream.at(report->GetSsrc());
 
-		rtpStream->ReceiveRtcpReceiverReport(report);
+		rtpStream->ReceiveRtcpReceiverReport(report, receivedAtUs);
 	}
 
-	void Consumer::ReceiveRtcpXrReceiverReferenceTime(RTC::RTCP::ReceiverReferenceTime* report)
+	void Consumer::ReceiveRtcpXrReceiverReferenceTime(
+	  RTC::RTCP::ReceiverReferenceTime* report, int64_t receivedAtUs)
 	{
 		MS_TRACE();
 
 		for (auto* rtpStream : this->rtpStreams)
 		{
-			rtpStream->ReceiveRtcpXrReceiverReferenceTime(report);
+			rtpStream->ReceiveRtcpXrReceiverReferenceTime(report, receivedAtUs);
 		}
 	}
 
-	uint32_t Consumer::GetTransmissionRate(uint64_t nowMs)
+	int64_t Consumer::GetTransmissionRate(int64_t nowMs)
 	{
 		MS_TRACE();
 
@@ -1537,7 +1553,7 @@ namespace RTC
 			return 0u;
 		}
 
-		uint32_t rate{ 0u };
+		int64_t rate{ 0 };
 
 		for (auto* rtpStream : this->rtpStreams)
 		{
@@ -1547,18 +1563,18 @@ namespace RTC
 		return rate;
 	}
 
-	float Consumer::GetRtt() const
+	float Consumer::GetRttMs() const
 	{
 		MS_TRACE();
 
-		float rtt{ 0 };
+		float rttMs{ 0 };
 
 		for (auto* rtpStream : this->rtpStreams)
 		{
-			rtt = std::max(rtpStream->GetRtt(), rtt);
+			rttMs = std::max(rtpStream->GetRttMs(), rttMs);
 		}
 
-		return rtt;
+		return rttMs;
 	}
 
 	void Consumer::UserOnTransportConnected()
@@ -1834,7 +1850,7 @@ namespace RTC
 			auto notification = FBS::Consumer::CreateTraceNotification(
 			  this->shared->GetChannelNotifier()->GetBufferBuilder(),
 			  FBS::Consumer::TraceEventType::KEYFRAME,
-			  this->shared->GetTimeMs(),
+			  static_cast<uint64_t>(this->shared->GetTimeMs()),
 			  FBS::Common::TraceDirection::DIRECTION_OUT,
 			  FBS::Consumer::TraceInfo::KeyFrameTraceInfo,
 			  traceInfo.Union());
@@ -1850,7 +1866,7 @@ namespace RTC
 			auto notification = FBS::Consumer::CreateTraceNotification(
 			  this->shared->GetChannelNotifier()->GetBufferBuilder(),
 			  FBS::Consumer::TraceEventType::RTP,
-			  this->shared->GetTimeMs(),
+			  static_cast<uint64_t>(this->shared->GetTimeMs()),
 			  FBS::Common::TraceDirection::DIRECTION_OUT,
 			  FBS::Consumer::TraceInfo::RtpTraceInfo,
 			  traceInfo.Union());
@@ -1874,7 +1890,7 @@ namespace RTC
 		auto notification = FBS::Consumer::CreateTraceNotification(
 		  this->shared->GetChannelNotifier()->GetBufferBuilder(),
 		  FBS::Consumer::TraceEventType::PLI,
-		  this->shared->GetTimeMs(),
+		  static_cast<uint64_t>(this->shared->GetTimeMs()),
 		  FBS::Common::TraceDirection::DIRECTION_IN,
 		  FBS::Consumer::TraceInfo::PliTraceInfo,
 		  traceInfo.Union());
@@ -1897,7 +1913,7 @@ namespace RTC
 		auto notification = FBS::Consumer::CreateTraceNotification(
 		  this->shared->GetChannelNotifier()->GetBufferBuilder(),
 		  FBS::Consumer::TraceEventType::FIR,
-		  this->shared->GetTimeMs(),
+		  static_cast<uint64_t>(this->shared->GetTimeMs()),
 		  FBS::Common::TraceDirection::DIRECTION_IN,
 		  FBS::Consumer::TraceInfo::FirTraceInfo,
 		  traceInfo.Union());
@@ -1917,7 +1933,7 @@ namespace RTC
 		auto notification = FBS::Consumer::CreateTraceNotification(
 		  this->shared->GetChannelNotifier()->GetBufferBuilder(),
 		  FBS::Consumer::TraceEventType::NACK,
-		  this->shared->GetTimeMs(),
+		  static_cast<uint64_t>(this->shared->GetTimeMs()),
 		  FBS::Common::TraceDirection::DIRECTION_IN);
 
 		EmitTraceEvent(notification);

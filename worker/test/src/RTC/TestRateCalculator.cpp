@@ -14,7 +14,7 @@ SCENARIO("RateCalculator", "[rate-calculator]")
 	};
 
 	auto validate =
-	  [](RTC::RateCalculator& rate, uint64_t timeBaseMs, const std::vector<TestRateCalculatorData>& input)
+	  [](RTC::RateCalculator& rate, int64_t timeBaseMs, const std::vector<TestRateCalculatorData>& input)
 	{
 		for (const auto& item : input)
 		{
@@ -23,28 +23,22 @@ SCENARIO("RateCalculator", "[rate-calculator]")
 			REQUIRE(rate.GetRate(timeBaseMs + item.offset) == item.rate);
 		}
 
-		// Repeat forcing nowMs to be 0.
+		// Repeat asking for the rate at a time older than the whole window, which
+		// must leave it untouched.
 		rate.Reset();
 
 		for (const auto& item : input)
 		{
 			rate.Update(item.size, timeBaseMs + item.offset);
 
-			REQUIRE(rate.GetRate(0 + item.offset) == item.rate);
+			REQUIRE(rate.GetRate(item.offset) == item.rate);
 		}
 
-		// Repeat forcing nowMs to be std::numeric_limits<uint64_t>::max() - 100.
-		rate.Reset();
-
-		for (const auto& item : input)
-		{
-			rate.Update(item.size, timeBaseMs + item.offset);
-
-			REQUIRE(rate.GetRate(std::numeric_limits<uint64_t>::max() - 100 + item.offset) == item.rate);
-		}
+		// Asking for the rate far in the future expires every item.
+		REQUIRE(rate.GetRate(std::numeric_limits<int64_t>::max()) == 0);
 	};
 
-	const uint64_t nowMs = 12345678;
+	const int64_t nowMs = 12345678;
 
 	SECTION("receive single item per 1000 ms")
 	{
@@ -163,7 +157,7 @@ SCENARIO("RateCalculator", "[rate-calculator]")
 	//   https://github.com/versatica/mediasoup/issues/1316
 	SECTION("buffer overflow should not crash")
 	{
-		// window: 1000ms, items: 3 (granularity: 333ms)
+		// window: 1000ms, items: 3 (granularity: 334ms)
 		RTC::RateCalculator rate(1000, 8000, 3);
 
 		// clang-format off
@@ -177,5 +171,107 @@ SCENARIO("RateCalculator", "[rate-calculator]")
 		// clang-format on
 
 		validate(rate, nowMs, input);
+	}
+
+	// NOTE: This pins the item grid alignment. Items must advance by whole
+	// itemSizeMs steps so that a full ring always spans the window size. If the
+	// newest item start time jumped to nowMs instead, items would absorb the
+	// elapsed time remainder, the ring would span more time than the window, and
+	// the rate would be over-reported.
+	SECTION("item boundaries do not drift with traffic timing")
+	{
+		// window: 1000ms, items: 100 (granularity: 10ms)
+		RTC::RateCalculator rate(1000, 8000, 100);
+
+		// 11ms spacing, deliberately not a multiple of the 10ms granularity.
+		for (int64_t i{ 0 }; i <= 100; ++i)
+		{
+			rate.Update(1, nowMs + (i * 11));
+		}
+
+		// The ring spans the items starting at [110, 1100], which hold the 91
+		// packets sent at 110, 121 ... 1100.
+		REQUIRE(rate.GetRate(nowMs + 1100) == 91 * 8);
+	}
+
+	// NOTE: This pins the GetRate() memoization key, which is both nowMs and the
+	// total count. Keying it on nowMs alone would return a stale rate.
+	SECTION("rate is recalculated after Update() with the same now")
+	{
+		RTC::RateCalculator rate(1000, 8000, 100);
+
+		rate.Update(5, nowMs);
+
+		REQUIRE(rate.GetRate(nowMs) == 40);
+
+		rate.Update(5, nowMs);
+
+		REQUIRE(rate.GetRate(nowMs) == 80);
+
+		rate.Update(5, nowMs);
+
+		REQUIRE(rate.GetRate(nowMs) == 120);
+
+		// Repeated reads with no Update() in between must be stable.
+		REQUIRE(rate.GetRate(nowMs) == 120);
+		REQUIRE(rate.GetRate(nowMs) == 120);
+	}
+
+	// NOTE: This pins the item size rounding for a window size which is not a
+	// multiple of it. Rounding the item size down would make a full ring span more
+	// time than the window, over-reporting the rate.
+	SECTION("window not divisible by items spans the window size")
+	{
+		// window: 1000ms, items: 3 (granularity: 334ms)
+		RTC::RateCalculator rate(1000, 8000, 3);
+
+		// Feed way past the ring size, so that any extra span accumulates.
+		for (int64_t i{ 0 }; i < 100; ++i)
+		{
+			rate.Update(1, nowMs + (i * 334));
+		}
+
+		// Steady state is a full ring of 3 items holding 1 byte each.
+		REQUIRE(rate.GetRate(nowMs + (99 * 334)) == 24);
+	}
+
+	// NOTE: This pins that the GetRate() memoization needs no "not calculated yet"
+	// mark. Its zeroed initial state is a valid entry, so a read at time 0 must be
+	// neither a stale hit nor a miss returning something else than 0.
+	SECTION("rate at time 0 on a fresh and on a reset calculator")
+	{
+		RTC::RateCalculator rate(1000, 8000, 100);
+
+		REQUIRE(rate.GetRate(0) == 0);
+
+		rate.Update(5, 0);
+
+		REQUIRE(rate.GetRate(0) == 40);
+
+		rate.Reset();
+
+		REQUIRE(rate.GetRate(0) == 0);
+
+		rate.Update(5, 0);
+
+		REQUIRE(rate.GetRate(0) == 40);
+	}
+
+	// NOTE: This pins the constructor clamping. A zero number of items used to
+	// divide by zero, and a zero window size to leave an empty buffer.
+	SECTION("degenerate constructor arguments are clamped")
+	{
+		RTC::RateCalculator noItems(1000, 8000, 0);
+		RTC::RateCalculator oneItem(1000, 8000, 1);
+		RTC::RateCalculator noWindow(0, 8000, 100);
+
+		noItems.Update(5, nowMs);
+		oneItem.Update(5, nowMs);
+		noWindow.Update(5, nowMs);
+
+		REQUIRE(noItems.GetRate(nowMs) == 40);
+		REQUIRE(oneItem.GetRate(nowMs) == 40);
+		// The window size is clamped to 1ms.
+		REQUIRE(noWindow.GetRate(nowMs) == 40000);
 	}
 }

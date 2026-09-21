@@ -649,6 +649,23 @@ namespace RTC
 		}
 	}
 
+	void Router::OnTransportProducerSpatialLayerActivityChanged(
+	  RTC::Transport* /*transport*/,
+	  RTC::Producer* producer,
+	  RTC::RTP::RtpStreamRecv* rtpStream,
+	  uint8_t spatialLayer,
+	  bool isActive)
+	{
+		MS_TRACE();
+
+		auto& consumers = this->mapProducerConsumers.at(producer);
+
+		for (auto* consumer : consumers)
+		{
+			consumer->ProducerSpatialLayerActivityChanged(rtpStream, spatialLayer, isActive);
+		}
+	}
+
 	void Router::OnTransportProducerRtpPacketReceived(
 	  RTC::Transport* /*transport*/, RTC::Producer* producer, RTC::RTP::Packet* packet)
 	{
@@ -701,20 +718,22 @@ namespace RTC
 		}
 	}
 
-	void Router::OnTransportNeedWorstRemoteFractionLost(
-	  RTC::Transport* /*transport*/,
-	  RTC::Producer* producer,
-	  uint32_t mappedSsrc,
-	  uint8_t& worstRemoteFractionLost)
+	uint8_t Router::OnTransportNeedWorstRemoteFractionLost(
+	  RTC::Transport* /*transport*/, RTC::Producer* producer, uint32_t mappedSsrc)
 	{
 		MS_TRACE();
 
-		auto& consumers = this->mapProducerConsumers.at(producer);
+		const auto& consumers = this->mapProducerConsumers.at(producer);
 
-		for (auto* consumer : consumers)
+		uint8_t worstRemoteFractionLost{ 0 };
+
+		for (const auto* consumer : consumers)
 		{
-			consumer->NeedWorstRemoteFractionLost(mappedSsrc, worstRemoteFractionLost);
+			worstRemoteFractionLost =
+			  std::max(consumer->GetWorstRemoteFractionLost(mappedSsrc), worstRemoteFractionLost);
 		}
+
+		return worstRemoteFractionLost;
 	}
 
 	void Router::OnTransportNewConsumer(
@@ -921,7 +940,7 @@ namespace RTC
 		{
 			return dataConsumer->GetType() == DataConsumer::Type::SCTP
 			         ? dataConsumer->GetSctpStreamParameters().streamId
-			         : 0;
+							 : 0;
 		};
 
 		// NOTE: We don't send the message to a matching DataConsumer right away.

@@ -34,11 +34,13 @@ public:
 	{
 		LogLevel logLevel{ LogLevel::LOG_ERROR };
 		struct LogTags logTags;
-		uint16_t rtcMinPort{ 10000u };
-		uint16_t rtcMaxPort{ 59999u };
+		uint16_t rtcMinPort{ 10000 };
+		uint16_t rtcMaxPort{ 59999 };
 		std::string dtlsCertificateFile;
 		std::string dtlsPrivateKeyFile;
+#ifndef MS_USE_BUILTIN_BWE
 		std::string libwebrtcFieldTrials{ "WebRTC-Bwe-AlrLimitedBackoff/Enabled/" };
+#endif
 	};
 
 public:

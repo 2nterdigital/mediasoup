@@ -92,7 +92,7 @@ namespace RTC
 		  builder,
 		  this->id.c_str(),
 		  this->type == DataProducer::Type::SCTP ? FBS::DataProducer::Type::SCTP
-		                                         : FBS::DataProducer::Type::DIRECT,
+			                                       : FBS::DataProducer::Type::DIRECT,
 		  sctpStreamParametersOffset,
 		  this->label.c_str(),
 		  this->protocol.c_str(),
@@ -107,7 +107,7 @@ namespace RTC
 		return FBS::DataProducer::CreateGetStatsResponseDirect(
 		  builder,
 		  // timestamp.
-		  this->shared->GetTimeMs(),
+		  static_cast<uint64_t>(this->shared->GetTimeMs()),
 		  // label.
 		  this->label.c_str(),
 		  // protocol.
@@ -193,7 +193,7 @@ namespace RTC
 	{
 		MS_TRACE();
 
-		switch (notification->event)
+		switch (notification->data->event())
 		{
 			case Channel::ChannelNotification::Event::DATAPRODUCER_SEND:
 			{

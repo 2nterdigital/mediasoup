@@ -2,7 +2,6 @@
 #define MS_RTC_SCTP_ASSOCIATION_METRICS_HPP
 
 #include "common.hpp"
-#include "RTC/SCTP/association/StateCookie.hpp"
 #include "RTC/SCTP/public/SctpTypes.hpp"
 
 namespace RTC
@@ -58,7 +57,7 @@ namespace RTC
 			 * Smoothed round trip time (in ms), corresponding to `spinfo_srtt`
 			 * defined in RFC 6458.
 			 */
-			uint64_t srttMs{ 0 };
+			int64_t srttMs{ 0 };
 
 			/**
 			 * Number of data items in the retransmission queue that haven’t been

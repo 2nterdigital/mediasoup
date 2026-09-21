@@ -29,7 +29,8 @@ public:
 	 * @remarks
 	 * - The caller is responsible for freeing it.
 	 */
-	virtual TimerHandleInterface* CreateTimer(TimerHandleInterface::Listener* listener) = 0;
+	virtual TimerHandleInterface* CreateTimer(
+	  TimerHandleInterface::Listener* listener, std::string label) = 0;
 
 	/**
 	 * Creates a BackoffTimerHandle timer.
@@ -43,35 +44,28 @@ public:
 	/**
 	 * Get current time in milliseconds.
 	 */
-	virtual uint64_t GetTimeMs() = 0;
+	virtual int64_t GetTimeMs() = 0;
 
 	/**
 	 * Get current time in microseconds.
 	 */
-	virtual uint64_t GetTimeUs() = 0;
+	virtual int64_t GetTimeUs() = 0;
 
 	/**
-	 * Get current time in nanoseconds.
-	 */
-	virtual uint64_t GetTimeNs() = 0;
-
-	/**
-	 * @remarks
-	 * - Used within libwebrtc dependency which uses int64_t values for time
-	 *   representation.
+	 * Get the time at which the current iteration of the event loop began (ms).
 	 *
-	 * @todo Remove once not needed.
+	 * @remarks
+	 * - It stays the same throughout an iteration no matter how long it takes, so it is
+	 *   what tells two iterations apart. The clocks above cannot, since they move while
+	 *   the iteration runs.
 	 */
-	virtual int64_t GetTimeMsInt64() = 0;
+	virtual uint64_t GetLoopTimeMs() = 0;
 
 	/**
-	 * @remarks
-	 * - Used within libwebrtc dependency which uses int64_t values for time
-	 *   representation.
-	 *
-	 * @todo Remove once not needed.
+	 * Distance from the clock above to the NTP epoch (us), which is what has to be added
+	 * to it to obtain the NTP timestamps of the RTCP we generate.
 	 */
-	virtual int64_t GetTimeUsInt64() = 0;
+	virtual int64_t GetNtpOffsetUs() = 0;
 };
 
 #endif

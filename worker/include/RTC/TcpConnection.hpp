@@ -2,7 +2,9 @@
 #define MS_RTC_TCP_CONNECTION_HPP
 
 #include "common.hpp"
+#include "handles/SendCallbacks.hpp"
 #include "handles/TcpConnectionHandle.hpp"
+#include "SharedInterface.hpp"
 
 namespace RTC
 {
@@ -16,15 +18,19 @@ namespace RTC
 
 		public:
 			virtual void OnTcpConnectionPacketReceived(
-			  RTC::TcpConnection* connection, const uint8_t* data, size_t len, size_t bufferLen) = 0;
+			  RTC::TcpConnection* connection,
+			  const uint8_t* data,
+			  size_t len,
+			  size_t bufferLen,
+			  int64_t receivedAtUs) = 0;
 		};
 
 	public:
-		TcpConnection(Listener* listener, size_t bufferSize);
+		TcpConnection(Listener* listener, SharedInterface* shared, size_t bufferSize);
 		~TcpConnection() override;
 
 	public:
-		void Send(const uint8_t* data, size_t len, ::TcpConnectionHandle::onSendCallback* cb);
+		void Send(const uint8_t* data, size_t len, onSendCallback cb);
 
 		/* Pure virtual methods inherited from ::TcpConnectionHandle. */
 	public:
@@ -33,8 +39,9 @@ namespace RTC
 	private:
 		// Passed by argument.
 		Listener* listener{ nullptr };
+		SharedInterface* shared{ nullptr };
 		// Others.
-		size_t frameStart{ 0u }; // Where the latest frame starts.
+		size_t frameStart{ 0 }; // Where the latest frame starts.
 	};
 } // namespace RTC
 

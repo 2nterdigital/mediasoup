@@ -163,6 +163,10 @@ Tasks are defined in `worker/tasks.py`. For development purposes, developers or 
 
 See all the tasks by running `invoke --list` within the `worker` folder.
 
+_NOTE:_ Tasks that require specific Meson options (such as `invoke test`, `invoke tidy`, `invoke test-asan-address`, `invoke test-asan-undefined` and `invoke fuzzer`) use their own Meson build directory within `worker/out/MEDIASOUP_BUILDTYPE`, so switching from a task to another doesn't reconfigure and rebuild everything. All of them install their binaries into `worker/out/MEDIASOUP_BUILDTYPE`.
+
+_NOTE:_ The "MESON_ARGS" environment variable is always honored, even if the build directory is already configured. Meson would otherwise ignore it and keep the options the build directory was configured with, so `invoke setup` passes `--reconfigure` to `meson setup` and gives it every option in `worker/meson_options.txt` set to its default value before "MESON_ARGS", which comes later and hence wins. This means that **dropping an option from "MESON_ARGS" reverts it to its default value**, so "MESON_ARGS" alone decides how the worker is built.
+
 _NOTE:_ For some of these tasks to work, npm dependencies of `worker/scripts/package.json` must be installed:
 
 ```bash
@@ -179,11 +183,11 @@ Installs `meson` and `ninja` into a local custom path.
 
 ### `invoke clean`
 
-Cleans built objects and binaries.
+Cleans the built objects and binaries of mediasoup, keeping those of the Meson subprojects and the dependencies, so they don't need to be built again.
 
 ### `invoke clean-build`
 
-Cleans built objects and other artifacts, but keeps `mediasoup-worker` binary in place.
+Cleans the Meson build directories entirely (hence also the built objects of the Meson subprojects and the dependencies), but keeps the installed binaries such as `mediasoup-worker` in place.
 
 ### `invoke clean-pip`
 
@@ -203,12 +207,12 @@ Check the status of the Meson subprojects. It also prints whether there are upda
 
 ### `invoke update-wrap-file [subproject]`
 
-Updates the wrap file of a Meson subproject (those in `worker/subprojects` folder). After updating it, `invoke setup` must be called by passing `MESON_ARGS="--reconfigure"` environment variable. Usage example:
+Updates the wrap file of a Meson subproject (those in `worker/subprojects` folder). After updating it, `invoke setup` must be called. Usage example:
 
 ```bash
 cd worker
 invoke update-wrap-file openssl
-MESON_ARGS="--reconfigure" invoke setup
+invoke setup
 ```
 
 ### `invoke mediasoup-worker`
@@ -269,7 +273,6 @@ Runs [clang-tidy](http://clang.llvm.org/extra/clang-tidy) and performs C++ code 
 
 **Requirements:**
 
-- `invoke clean` must have been called first.
 - A specific version of `clang-tidy`is required. See [Install clang-tidy](#install-clang-tidy).
 - `clang-tidy-VERSION` or `clang-tidy` (corresponding to the required version) must be in the `PATH`. If not, add it before running the command. Same for other `clang-tidy` related executables such as `run-clang-tidy` and `clang-apply-replacements`,
 

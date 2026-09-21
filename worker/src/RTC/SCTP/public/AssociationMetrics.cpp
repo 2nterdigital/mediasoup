@@ -14,7 +14,7 @@ namespace RTC
 		{
 			MS_TRACE();
 
-			auto peerImplementationStringView = Types::SctpImplementationToString(this->peerImplementation);
+			auto peerImplementationStringView = Types::sctpImplementationToString(this->peerImplementation);
 
 			MS_DUMP_CLEAN(indentation, "<SCTP::AssociationMetrics>");
 			MS_DUMP_CLEAN(indentation, "  tx packets count: %" PRIu64, this->txPacketsCount);
@@ -24,7 +24,7 @@ namespace RTC
 			MS_DUMP_CLEAN(indentation, "  rtx packets count: %" PRIu64, this->rtxPacketsCount);
 			MS_DUMP_CLEAN(indentation, "  rtx bytes count: %" PRIu64, this->rtxBytesCount);
 			MS_DUMP_CLEAN(indentation, "  current congestion window (bytes): %zu", this->cwndBytes);
-			MS_DUMP_CLEAN(indentation, "  smoothed round trip time (ms): %" PRIu64, this->srttMs);
+			MS_DUMP_CLEAN(indentation, "  smoothed round trip time (ms): %" PRIi64, this->srttMs);
 			MS_DUMP_CLEAN(indentation, "  unacked data count: %zu", this->unackDataCount);
 			MS_DUMP_CLEAN(
 			  indentation, "  peer's last announced receiver window size: %" PRIu32, this->peerRwndBytes);

@@ -2,6 +2,7 @@
 #define MS_RTC_PLAIN_TRANSPORT_HPP
 
 #include "FBS/plainTransport.h"
+#include "handles/SendCallbacks.hpp"
 #include "RTC/SrtpSession.hpp"
 #include "RTC/Transport.hpp"
 #include "RTC/TransportTuple.hpp"
@@ -35,23 +36,32 @@ namespace RTC
 		bool IsConnected() const override;
 		bool HasSrtp() const;
 		bool IsSrtpReady() const;
-		void SendRtpPacket(
-		  RTC::Consumer* consumer,
-		  RTC::RTP::Packet* packet,
-		  RTC::Transport::onSendCallback* cb = nullptr) override;
+		void SendRtpPacket(RTC::Consumer* consumer, RTC::RTP::Packet* packet, onSendCallback cb = {}) override;
 		void SendRtcpPacket(RTC::RTCP::Packet* packet) override;
 		void SendRtcpCompoundPacket(RTC::RTCP::CompoundPacket* packet) override;
 		void SendMessage(
 		  RTC::DataConsumer* dataConsumer,
 		  RTC::SCTP::Message message,
-		  onQueuedCallback* cb = nullptr) override;
+		  onMessageQueuedCallback cb = {}) override;
 		bool SendData(const uint8_t* data, size_t len) override;
 		void RecvStreamClosed(uint32_t ssrc) override;
 		void SendStreamClosed(uint32_t ssrc) override;
-		void OnPacketReceived(RTC::TransportTuple* tuple, const uint8_t* data, size_t len, size_t bufferLen);
-		void OnRtpDataReceived(RTC::TransportTuple* tuple, const uint8_t* data, size_t len, size_t bufferLen);
-		void OnRtcpDataReceived(RTC::TransportTuple* tuple, const uint8_t* data, size_t len);
-		void OnSctpDataReceived(RTC::TransportTuple* tuple, const uint8_t* data, size_t len);
+		void OnPacketReceived(
+		  RTC::TransportTuple* tuple,
+		  const uint8_t* data,
+		  size_t len,
+		  size_t bufferLen,
+		  int64_t receivedAtUs);
+		void OnRtpDataReceived(
+		  RTC::TransportTuple* tuple,
+		  const uint8_t* data,
+		  size_t len,
+		  size_t bufferLen,
+		  int64_t receivedAtUs);
+		void OnRtcpDataReceived(
+		  RTC::TransportTuple* tuple, const uint8_t* data, size_t len, int64_t receivedAtUs);
+		void OnSctpDataReceived(
+		  RTC::TransportTuple* tuple, const uint8_t* data, size_t len, int64_t receivedAtUs);
 		void EmitTuple() const;
 		void EmitRtcpTuple() const;
 
@@ -62,7 +72,8 @@ namespace RTC
 		  const uint8_t* data,
 		  size_t len,
 		  size_t bufferLen,
-		  const struct sockaddr* remoteAddr) override;
+		  const struct sockaddr* remoteAddr,
+		  int64_t receivedAtUs) override;
 
 	private:
 		// Allocated by this.

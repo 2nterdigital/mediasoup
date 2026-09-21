@@ -2,6 +2,39 @@
 
 ### NEXT
 
+### 0.28.1
+
+- Worker: Fix endless regeneration of FlatBuffers generated headers ([PR #1926](https://github.com/versatica/mediasoup/pull/1926)).
+- SCTP: Fix unbounded SCTP reassembly queue growth during deferred reset processing ([PR #1927](https://github.com/versatica/mediasoup/pull/1927)).
+- Worker: Refactor send callbacks ([PR #1930](https://github.com/versatica/mediasoup/pull/1930)).
+
+### 0.28.0
+
+- Worker: New `RateCalculator` ([PR #1899](https://github.com/versatica/mediasoup/pull/1899)).
+- Worker: Fix transport-cc arrival time precision by working in microseconds ([PR #1914](https://github.com/versatica/mediasoup/pull/1914)).
+- Worker: Use real receive time of packets ([PR #1917](https://github.com/versatica/mediasoup/pull/1917)).
+- Worker: Use `int64_t` for time everywhere ([PR #1918](https://github.com/versatica/mediasoup/pull/1918)).
+- Worker: Use `int64_t` for bitrate everywhere ([PR #1919](https://github.com/versatica/mediasoup/pull/1919)).
+- Improve worker build system ([PR #1920](https://github.com/versatica/mediasoup/pull/1920)).
+- Improve worker build system (part 2) ([PR #1923](https://github.com/versatica/mediasoup/pull/1923)).
+- Fix SVC target layers not re-evaluated when a spatial layer stops ([PR #1924](https://github.com/versatica/mediasoup/pull/1924)).
+
+### 0.27.0
+
+- **Breaking change:** Simulcast and SVC: Limit temporal layer to the preferred one ([PR #1892](https://github.com/versatica/mediasoup/pull/1892)).
+
+### 0.26.0
+
+- Worker: Fix undefined behavior in `RtpStreamRecv::UpdateScore()` when no packets were received ([PR #1886](https://github.com/versatica/mediasoup/pull/1886)).
+- SCTP: Fix `SackChunk::GetValidatedGapAckBlocks()` returning a bogus gap-ack-block ([PR #1891](https://github.com/versatica/mediasoup/pull/1891)).
+- Do not make generated RTCP Sender Reports depend on RTP packet arrival time ([issue #1881](https://github.com/versatica/mediasoup/issues/1881)):
+  - `RemoteClockOffsetEstimator` class ([PR #1882](https://github.com/versatica/mediasoup/pull/1882)).
+  - Prepare `RtpStream` classes for capture time based RTCP Sender Reports ([PR #1883](https://github.com/versatica/mediasoup/pull/1883), [PR #1888](https://github.com/versatica/mediasoup/pull/1888)).
+  - `RemoteCaptureTimeEstimator` class ([PR #1884](https://github.com/versatica/mediasoup/pull/1884)).
+  - Estimate the capture instant of each received RTP packet ([PR #1885](https://github.com/versatica/mediasoup/pull/1885)).
+  - Generate RTCP Sender Reports based on the capture instant of the media rather than on the packet arrival time ([PR #1887](https://github.com/versatica/mediasoup/pull/1887)).
+  - `SimulcastProducerStreamManager`: Apply new capture time logic and fix 'abs-capture-time' rewriting ([PR #1889](https://github.com/versatica/mediasoup/pull/1889)).
+
 ### 0.25.2
 
 - Worker: Verify `DataConsumer` subchannels before cloning the message ([PR #1880](https://github.com/versatica/mediasoup/pull/1880)).
