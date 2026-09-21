@@ -4,11 +4,11 @@
 
 - Fork: `git@github.com:2nterdigital/mediasoup.git`
 - Upstream: `https://github.com/versatica/mediasoup.git`
-- Upstream release tag: `rust-0.27.0`
-- Annotated tag object: `e3d1689556251ae31e1d8e845ae9206d71aad6da`
-- Release commit: `7b896f1743b6f4d9d7b237fc1d642828fa6c5b6c`
-- Package: `mediasoup 0.27.0`
-- Coupled packages: `mediasoup-sys 0.17.0`, `mediasoup-types 0.4.0`
+- Upstream release tag: `rust-0.28.1`
+- Annotated tag object: `2f15d8f70ba7f76ba93526140d74fae76a0445a6`
+- Release commit: `618400f080905a840e8bcaab7084f43c6228f150`
+- Package: `mediasoup 0.28.1`
+- Coupled packages: `mediasoup-sys 0.18.1`, `mediasoup-types 0.5.0`
 - License: ISC
 
 Consumers must pin the fork with a complete commit SHA. A branch name is a
@@ -67,9 +67,9 @@ described in `TORNADO_FORK.md` on the `dev` line of this fork. Drop this
 divergence when upstream stops running notification callbacks under the
 `EventHandlers` mutex.
 
-The historical `dev@28a0a98161763ceb035872fa642e94d303ca5dd4` commit is not
-merged because it was based on mediasoup 0.25.2. Its resource-usage behavior
-was reapplied directly to the official 0.27.0 release instead.
+Both divergences are cherry-picked unchanged from the `rust-0.27.0` line of
+this fork (`edumeet-rust-0.27.0`); the files they touch are identical in the
+two upstream releases.
 
 ## Verification
 
@@ -83,5 +83,5 @@ cargo check -p mediasoup --lib
 cargo clippy -p mediasoup --all-targets -- -D warnings
 cargo fmt --all -- --check
 git diff --check
-git diff --name-status 7b896f1743b6f4d9d7b237fc1d642828fa6c5b6c...HEAD
+git diff --name-status 618400f080905a840e8bcaab7084f43c6228f150...HEAD
 ```
