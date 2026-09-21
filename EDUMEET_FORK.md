@@ -62,14 +62,33 @@ since `rust-0.10.0` and not fixed as of `v3` at
 - `rust/tests/integration/notification_dispatch.rs` reproduces the callback
   cases; all of its tests deadlock without these changes.
 
-The same change, with the remaining upstream hazards it does not cover, is
-described in `TORNADO_FORK.md` on the `dev` line of this fork. Drop this
-divergence when upstream stops running notification callbacks under the
-`EventHandlers` mutex.
+Still unsafe, unchanged from upstream:
 
-Both divergences are cherry-picked unchanged from the `rust-0.27.0` line of
-this fork (`edumeet-rust-0.27.0`); the files they touch are identical in the
-two upstream releases.
+- Releasing the last `WorkerManager` handle inside a `close`/`*_close` callback
+  that runs on the single executor thread of `WorkerManager::new()` parks that
+  thread: it waits for worker exits that only a `WorkerClose` task queued on
+  itself can cause. Keep a `WorkerManager` handle on an application thread and
+  release it there last.
+- A callback registered on an entity must capture a `downgrade()`d handle of
+  that entity, never a strong clone: dropping its `HandlerId` destroys the
+  callback while `event-listener-primitives` holds the bag mutex, and the
+  entity's drop then needs the same mutex on the same thread.
+- `BufferMessagesGuard::drop()` still replays buffered notifications while
+  holding `buffered_notifications_for`. Releasing it first would let the worker
+  thread deliver newer notifications of that target before the buffered ones.
+
+Drop this divergence when upstream stops running notification callbacks under
+the `EventHandlers` mutex; the tests stay valid either way.
+
+## Lines and releases
+
+- This line, `rust-0.28.1-patched`, is the maintained one. A release is a tag
+  `2nt-rust-0.28.1-pN` on it; consumers pin the full commit SHA of a tag. The
+  name must not match `rust-X.Y.Z`, which triggers the upstream crate publish
+  workflow.
+- `edumeet-rust-0.27.0` (`71ac8c8ebc15139cd78fd2bbd6550433c9d93bcd`) carries the
+  resource-usage API only, does not have the deadlock fix and is no longer
+  maintained. The resource-usage commit here is cherry-picked from it.
 
 ## Verification
 
