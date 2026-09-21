@@ -524,9 +524,13 @@ impl DataConsumer {
                             }
                         }
                         Notification::DataProducerPause => {
-                            let mut data_producer_paused = data_producer_paused.lock();
-                            let paused = *paused.lock();
-                            *data_producer_paused = true;
+                            let paused = {
+                                let paused = paused.lock();
+                                let mut data_producer_paused = data_producer_paused.lock();
+                                *data_producer_paused = true;
+
+                                *paused
+                            };
 
                             handlers.data_producer_pause.call_simple();
 
@@ -535,9 +539,13 @@ impl DataConsumer {
                             }
                         }
                         Notification::DataProducerResume => {
-                            let mut data_producer_paused = data_producer_paused.lock();
-                            let paused = *paused.lock();
-                            *data_producer_paused = false;
+                            let paused = {
+                                let paused = paused.lock();
+                                let mut data_producer_paused = data_producer_paused.lock();
+                                *data_producer_paused = false;
+
+                                *paused
+                            };
 
                             handlers.data_producer_resume.call_simple();
 
@@ -734,9 +742,13 @@ impl DataConsumer {
             .request(self.id(), DataConsumerPauseRequest {})
             .await?;
 
-        let mut paused = self.inner().paused.lock();
-        let was_paused = *paused || *self.inner().data_producer_paused.lock();
-        *paused = true;
+        let was_paused = {
+            let mut paused = self.inner().paused.lock();
+            let was_paused = *paused || *self.inner().data_producer_paused.lock();
+            *paused = true;
+
+            was_paused
+        };
 
         if !was_paused {
             self.inner().handlers.pause.call_simple();
@@ -754,9 +766,13 @@ impl DataConsumer {
             .request(self.id(), DataConsumerResumeRequest {})
             .await?;
 
-        let mut paused = self.inner().paused.lock();
-        let was_paused = *paused || *self.inner().data_producer_paused.lock();
-        *paused = false;
+        let was_paused = {
+            let mut paused = self.inner().paused.lock();
+            let was_paused = *paused || *self.inner().data_producer_paused.lock();
+            *paused = false;
+
+            was_paused
+        };
 
         if was_paused {
             self.inner().handlers.resume.call_simple();
