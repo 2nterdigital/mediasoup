@@ -84,11 +84,25 @@ impl EventHandlers<Arc<dyn Fn(notification::NotificationRef<'_>) + Send + Sync +
         target_id: &SubscriptionTarget,
         value: notification::NotificationRef<'_>,
     ) {
-        let handlers = self.handlers.lock();
-        if let Some(list) = handlers.get(target_id) {
-            for callback in list.callbacks.values() {
-                callback(value);
-            }
+        // Callbacks must not run under `handlers` lock: a callback, or a value it creates and
+        // drops (like strong `Producer` handles in volumes of audio level observer), may release
+        // the last reference to an entity, whose `SubscriptionHandler` needs this same
+        // non-reentrant lock on this same thread when dropped.
+        //
+        // Every subscriber in this crate registers one callback for its own target, in which case
+        // this clones one `Arc` and doesn't allocate.
+        let (first_callback, other_callbacks) = {
+            let handlers = self.handlers.lock();
+            let Some(list) = handlers.get(target_id) else {
+                return;
+            };
+            let mut callbacks = list.callbacks.values().cloned();
+
+            (callbacks.next(), callbacks.collect::<Vec<_>>())
+        };
+
+        for callback in first_callback.iter().chain(&other_callbacks) {
+            callback(value);
         }
     }
 }

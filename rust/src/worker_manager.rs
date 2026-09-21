@@ -8,13 +8,16 @@ use async_executor::Executor;
 use async_oneshot::Sender;
 use event_listener_primitives::{Bag, HandlerId};
 use futures_lite::future;
-use log::debug;
+use log::{debug, error};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ops::DerefMut;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::{fmt, io, mem};
+use std::{fmt, io, mem, thread};
+
+/// Prefix of the name `worker::utils::run_worker_with_channels()` gives to worker threads.
+const WORKER_THREAD_NAME_PREFIX: &str = "mediasoup-worker-";
 
 #[derive(Default)]
 #[allow(clippy::type_complexity)]
@@ -35,8 +38,34 @@ struct Inner {
 impl Drop for Inner {
     fn drop(&mut self) {
         let workers = mem::take(self.workers.lock().deref_mut());
-        for exit_receiver in workers.into_values() {
-            let _ = exit_receiver.recv();
+        // Has to outlive the wait below: it keeps the thread created with `WorkerManager::new()`
+        // running, and that thread is what delivers `WorkerClose` to the workers waited for
+        let stop_sender = self._stop_sender.take();
+        let wait_for_workers = move || {
+            for exit_receiver in workers.into_values() {
+                let _ = exit_receiver.recv();
+            }
+            drop(stop_sender);
+        };
+
+        // The last handle can be released on a worker thread: by a notification callback, by a
+        // value it drops or by the callback itself when its subscription was dropped from another
+        // thread while it was running. Waiting right there would be waiting for the current thread
+        // to exit, so the wait is handed over to a thread of its own.
+        //
+        // Panic is not an option on a worker thread, hence no `thread::spawn()`.
+        let on_worker_thread = thread::current()
+            .name()
+            .is_some_and(|name| name.starts_with(WORKER_THREAD_NAME_PREFIX));
+        if on_worker_thread {
+            if let Err(error) = thread::Builder::new()
+                .name("mediasoup-manager-drop".to_string())
+                .spawn(wait_for_workers)
+            {
+                error!("failed to spawn thread waiting for workers to exit: {error}");
+            }
+        } else {
+            wait_for_workers();
         }
     }
 }
@@ -89,7 +118,7 @@ impl WorkerManager {
         let (stop_sender, stop_receiver) = async_oneshot::oneshot::<()>();
         {
             let executor = Arc::clone(&executor);
-            std::thread::spawn(move || {
+            thread::spawn(move || {
                 // Will return Err(Closed) when `WorkerManager` struct is dropped
                 let _ = future::block_on(executor.run(stop_receiver));
             });
