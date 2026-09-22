@@ -86,9 +86,27 @@ the `EventHandlers` mutex; the tests stay valid either way.
   `2nt-rust-0.28.1-pN` on it; consumers pin the full commit SHA of a tag. The
   name must not match `rust-X.Y.Z`, which triggers the upstream crate publish
   workflow.
+- Released so far: `2nt-rust-0.28.1-p1` (notification dispatch deadlock fix),
+  `2nt-rust-0.28.1-p2` (worker registry lock re-entry fix and its close seam,
+  cherry-picked from `codex/issue-18-worker-close-seam`, which was based on the
+  retired 0.27.0 line).
 - `edumeet-rust-0.27.0` (`71ac8c8ebc15139cd78fd2bbd6550433c9d93bcd`) carries the
   resource-usage API only, does not have the deadlock fix and is no longer
   maintained. The resource-usage commit here is cherry-picked from it.
+
+## Worker registry lock re-entry (p2)
+
+`test_worker::WORKERS` is a second registry with the same hazard class as the
+notification dispatch above: `worker_ids()`/`close_worker()` used to
+`Weak::upgrade()` and then drop the resulting strong handle while still holding
+the registry lock, so a worker whose drop re-enters that registry deadlocks on
+the same non-reentrant mutex on the same thread. Fixed by releasing the guard
+before the upgraded handle can drop.
+
+The close seam it comes with is feature-gated: run it with
+`cargo test --features test-worker-close --test test_worker_close`. Without the
+feature the test file compiles to nothing and reports `0 passed`, which reads
+like a pass but runs nothing.
 
 ## Verification
 
