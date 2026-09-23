@@ -132,10 +132,50 @@ flatbuffers::Offset<FBS::Worker::ResourceUsageResponse> Worker::FillBufferResour
 {
 	MS_TRACE();
 
-	int err;
-	uv_rusage_t uvRusage{}; // NOLINT(cppcoreguidelines-pro-type-member-init)
+	// uv_getrusage() (used here through mediasoup 0.27-0.28) reports whole-*process* usage:
+	// uv_getrusage(3) wraps getrusage(RUSAGE_SELF, ...) on POSIX and
+	// GetProcessTimes()/GetProcessMemoryInfo() on Windows. The Rust binding runs every Worker as a
+	// thread inside one process, so every worker's ResourceUsageResponse carried the identical
+	// ru_utime/ru_stime/ru_maxrss (ech0-media issue #130: every `worker` Prometheus label read the
+	// same process-wide number).
+	//
+	// This request is handled on the calling worker's own libuv loop thread: Worker::HandleRequest()
+	// above runs as Channel::ChannelSocket::Listener's callback, itself driven by this worker's own
+	// DepLibUV::RunLoop() (see Worker::Run() above) - never on another worker's thread or a shared
+	// pool. uv_getrusage_thread() (libuv >= 1.50; this fork bundles 1.51.0 -
+	// worker/subprojects/libuv.wrap) therefore reports exactly this worker's own CPU time.
+	uv_rusage_t uvThreadRusage{}; // NOLINT(cppcoreguidelines-pro-type-member-init)
+	int err = uv_getrusage_thread(std::addressof(uvThreadRusage));
 
-	err = uv_getrusage(std::addressof(uvRusage));
+	if (err == UV_ENOTSUP)
+	{
+		// No per-thread rusage on this platform: libuv returns UV_ENOTSUP when it has neither the
+		// macOS mach_thread_self() path nor RUSAGE_LWP/RUSAGE_THREAD (libuv src/unix/core.c,
+		// uv_getrusage_thread()). Fall back to the previous, process-wide reading instead of failing
+		// the request - every worker duplicating the same process-wide number is exactly what this
+		// bug already shipped as, so this keeps that platform's `/metrics` working unchanged rather
+		// than newly breaking it.
+		err = uv_getrusage(std::addressof(uvThreadRusage));
+	}
+
+	if (err != 0)
+	{
+		MS_THROW_ERROR("uv_getrusage_thread() failed: %s", uv_strerror(err));
+	}
+
+	// ru_maxrss is deliberately re-read from the process-wide uv_getrusage() below instead of taken
+	// from uvThreadRusage above: uv_getrusage_thread() does not give it a meaningful per-thread value
+	// on any platform this fork builds for. Linux and the BSDs (getrusage(RUSAGE_THREAD/RUSAGE_LWP,
+	// ...)) still report the *process's* resident set, because every thread of a process shares one
+	// address space (one `mm_struct` on Linux) - there is no such thing as "this thread's RSS"
+	// there. macOS (mach thread_info) and Windows (GetThreadTimes()) do not fill ru_maxrss through
+	// the per-thread call at all; libuv zeroes it there instead (its own uv_getrusage_thread() doc:
+	// "On macOS and Windows not all fields are set, the unsupported fields are filled with zeroes").
+	// Reporting the process-wide max_rss for every worker is the honest number (peak RSS of the
+	// process those workers' threads share), not a second, silently-zeroed per-worker bug hiding
+	// behind the CPU fix.
+	uv_rusage_t uvProcessRusage{}; // NOLINT(cppcoreguidelines-pro-type-member-init)
+	err = uv_getrusage(std::addressof(uvProcessRusage));
 
 	if (err != 0)
 	{
@@ -144,49 +184,52 @@ flatbuffers::Offset<FBS::Worker::ResourceUsageResponse> Worker::FillBufferResour
 
 	return FBS::Worker::CreateResourceUsageResponse(
 	  builder,
-	  // Add ru_utime (uv_timeval_t, user CPU time used, converted to ms).
-	  (uvRusage.ru_utime.tv_sec * static_cast<uint64_t>(1000)) + (uvRusage.ru_utime.tv_usec / 1000),
-	  // Add ru_stime (uv_timeval_t, system CPU time used, converted to ms).
-	  (uvRusage.ru_stime.tv_sec * static_cast<uint64_t>(1000)) + (uvRusage.ru_stime.tv_usec / 1000),
-	  // Add ru_maxrss (uint64_t, maximum resident set size).
-	  uvRusage.ru_maxrss,
+	  // Add ru_utime (uv_timeval_t, user CPU time used, converted to ms) - this worker thread's own
+	  // (uv_getrusage_thread(); see the comment above).
+	  (uvThreadRusage.ru_utime.tv_sec * static_cast<uint64_t>(1000)) + (uvThreadRusage.ru_utime.tv_usec / 1000),
+	  // Add ru_stime (uv_timeval_t, system CPU time used, converted to ms) - likewise per-thread.
+	  (uvThreadRusage.ru_stime.tv_sec * static_cast<uint64_t>(1000)) + (uvThreadRusage.ru_stime.tv_usec / 1000),
+	  // Add ru_maxrss (uint64_t, maximum resident set size, in kilobytes - getrusage(2)'s native
+	  // unit, which libuv normalizes every platform to) - the process's, not this thread's; see the
+	  // comment above for why.
+	  uvProcessRusage.ru_maxrss,
 
 	  // Add ru_ixrss (uint64_t, integral shared memory size).
-	  uvRusage.ru_ixrss,
+	  uvThreadRusage.ru_ixrss,
 
 	  // Add ru_idrss (uint64_t, integral unshared data size).
-	  uvRusage.ru_idrss,
+	  uvThreadRusage.ru_idrss,
 
 	  // Add ru_isrss (uint64_t, integral unshared stack size).
-	  uvRusage.ru_isrss,
+	  uvThreadRusage.ru_isrss,
 
 	  // Add ru_minflt (uint64_t, page reclaims, soft page faults).
-	  uvRusage.ru_minflt,
+	  uvThreadRusage.ru_minflt,
 
 	  // Add ru_majflt (uint64_t, page faults, hard page faults).
-	  uvRusage.ru_majflt,
+	  uvThreadRusage.ru_majflt,
 
 	  // Add ru_nswap (uint64_t, swaps).
-	  uvRusage.ru_nswap,
+	  uvThreadRusage.ru_nswap,
 
 	  // Add ru_inblock (uint64_t, block input operations).
-	  uvRusage.ru_inblock,
+	  uvThreadRusage.ru_inblock,
 
 	  // Add ru_oublock (uint64_t, block output operations).
-	  uvRusage.ru_oublock,
+	  uvThreadRusage.ru_oublock,
 
 	  // Add ru_msgsnd (uint64_t, IPC messages sent).
-	  uvRusage.ru_msgsnd,
+	  uvThreadRusage.ru_msgsnd,
 
 	  // Add ru_msgrcv (uint64_t, IPC messages received).
-	  uvRusage.ru_msgrcv,
+	  uvThreadRusage.ru_msgrcv,
 
 	  // Add ru_nsignals (uint64_t, signals received).
-	  uvRusage.ru_nsignals,
+	  uvThreadRusage.ru_nsignals,
 	  // Add ru_nvcsw (uint64_t, voluntary context switches).
-	  uvRusage.ru_nvcsw,
+	  uvThreadRusage.ru_nvcsw,
 	  // Add ru_nivcsw (uint64_t, involuntary context switches).
-	  uvRusage.ru_nivcsw);
+	  uvThreadRusage.ru_nivcsw);
 }
 
 RTC::WebRtcServer* Worker::AssertAndGetWebRtcServerById(
